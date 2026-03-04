@@ -264,6 +264,37 @@ def _set_auto_status(info_hash: str, status: str, note: str = ""):
         save_pending(pending)
 
 
+async def _ut_save_path(info_hash: str) -> Path:
+    """Return the full save path (file or folder) for a torrent using the list API."""
+    data = await ut_api({"list": "1"})
+    for t in data.get("torrents", []):
+        if len(t) > 26 and t[0].upper() == info_hash.upper():
+            return Path(t[26]) / t[2]   # download_dir / name
+    raise HTTPException(404, "Torrent not found in uTorrent")
+
+
+def _copy_video_to_movies(save_path: Path, movies_folder: Path) -> list:
+    """Copy video file(s) from save_path into movies_folder. Returns list of dest Paths."""
+    copied = []
+    if save_path.is_file() and save_path.suffix.lower() in VIDEO_EXT:
+        # Single file → put it in a clean-named subfolder
+        folder = movies_folder / clean_title(save_path.name)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / save_path.name
+        if not dest.exists():
+            shutil.copy2(save_path, dest)
+        copied.append(dest)
+    elif save_path.is_dir():
+        for f in save_path.rglob("*"):
+            if f.is_file() and f.suffix.lower() in VIDEO_EXT:
+                dest = movies_folder / f.relative_to(save_path.parent)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if not dest.exists():
+                    shutil.copy2(f, dest)
+                copied.append(dest)
+    return copied
+
+
 async def auto_copy_and_subtitle(info_hash: str):
     """Background task: copy completed torrent → download best Hebrew subtitle."""
 
@@ -277,28 +308,14 @@ async def auto_copy_and_subtitle(info_hash: str):
         return
 
     try:
-        data      = await ut_api({"action": "getprops", "hash": info_hash})
-        props     = data.get("props", [])
-        save_path = Path(props[0].get("path", "")) if props else Path()
+        save_path = await _ut_save_path(info_hash)
     except Exception as e:
         _set_auto_status(info_hash, "error", f"uTorrent: {e}")
         return
 
     copied = []
     try:
-        if save_path.is_file() and save_path.suffix.lower() in VIDEO_EXT:
-            dest = movies_folder / save_path.name
-            if not dest.exists():
-                shutil.copy2(save_path, dest)
-            copied.append(dest)
-        elif save_path.is_dir():
-            for f in save_path.rglob("*"):
-                if f.is_file() and f.suffix.lower() in VIDEO_EXT:
-                    dest = movies_folder / f.relative_to(save_path.parent)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    if not dest.exists():
-                        shutil.copy2(f, dest)
-                    copied.append(dest)
+        copied = _copy_video_to_movies(save_path, movies_folder)
     except Exception as e:
         _set_auto_status(info_hash, "error", f"Copy failed: {e}")
         return
@@ -389,35 +406,19 @@ async def copy_torrent(info_hash: str):
         raise HTTPException(400, "Movies folder not configured or not found. Set it in Settings.")
 
     try:
-        data  = await ut_api({"action": "getprops", "hash": info_hash})
-        props = data.get("props", [])
-        if not props:
-            raise HTTPException(404, "Torrent not found in uTorrent")
-        save_path = Path(props[0].get("path", ""))
+        save_path = await _ut_save_path(info_hash)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"uTorrent error: {e}")
 
-    copied = []
-
-    if save_path.is_file():
-        if save_path.suffix.lower() in VIDEO_EXT:
-            dest = movies_folder / save_path.name
-            if not dest.exists():
-                shutil.copy2(save_path, dest)
-            copied.append(str(dest))
-    elif save_path.is_dir():
-        for f in save_path.rglob("*"):
-            if f.is_file() and f.suffix.lower() in VIDEO_EXT:
-                dest = movies_folder / f.relative_to(save_path.parent)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if not dest.exists():
-                    shutil.copy2(f, dest)
-                copied.append(str(dest))
+    try:
+        copied = _copy_video_to_movies(save_path, movies_folder)
+    except Exception as e:
+        raise HTTPException(500, f"Copy failed: {e}")
 
     if not copied:
-        raise HTTPException(404, "No video files found to copy (supported: mkv, mp4, avi, mov)")
+        raise HTTPException(404, f"No video files found at {save_path}")
 
     pending = load_pending()
     if info_hash in pending:
@@ -583,30 +584,28 @@ async def movie_rating(title: str):
 
     # ── OMDB: Tomatometer (🍅 critics) + IMDB rating (⭐ audience) ──────────
     omdb_key = cfg.get("omdb_api_key", "")
-    if not omdb_key:
+    if omdb_key:
+        try:
+            params: dict = {"apikey": omdb_key, "t": clean, "type": "movie"}
+            if year:
+                params["y"] = year
+            async with httpx.AsyncClient(timeout=8) as c:
+                r = await c.get(OMDB_BASE, params=params)
+                data = r.json()
+                if data.get("Response") == "True":
+                    for rating in data.get("Ratings", []):
+                        src, val = rating.get("Source", ""), rating.get("Value", "")
+                        if src == "Rotten Tomatoes":
+                            result["tomatometer"] = val
+                        elif src == "Internet Movie Database":
+                            result["imdb"] = val
+        except Exception:
+            pass
+
+    # Only cache when we got real data — so it retries if key was inactive
+    if result["tomatometer"] or result["imdb"]:
         cache[key] = result
         _save_ratings_cache(cache)
-        return result
-
-    try:
-        params: dict = {"apikey": omdb_key, "t": clean, "type": "movie"}
-        if year:
-            params["y"] = year
-        async with httpx.AsyncClient(timeout=8) as c:
-            r = await c.get(OMDB_BASE, params=params)
-            data = r.json()
-            if data.get("Response") == "True":
-                for rating in data.get("Ratings", []):
-                    src, val = rating.get("Source", ""), rating.get("Value", "")
-                    if src == "Rotten Tomatoes":
-                        result["tomatometer"] = val
-                    elif src == "Internet Movie Database":
-                        result["imdb"] = val
-    except Exception:
-        pass
-
-    cache[key] = result
-    _save_ratings_cache(cache)
     return result
 
 

@@ -508,19 +508,19 @@ async function loadMyMovies() {
 }
 
 function buildRatingBadges(r) {
-  if (!r) return '<span style="color:var(--muted);font-size:0.65rem">···</span>';
+  if (r === undefined) return '<span style="color:var(--muted);font-size:0.65rem">···</span>';
   let html = '';
-  if (r.tomatometer) {
+  if (r && r.tomatometer) {
     const pct = parseInt(r.tomatometer);
     const cls = pct >= 70 ? 'rt-fresh' : pct >= 40 ? 'rt-mixed' : 'rt-rotten';
     html += `<span class="rt-badge ${cls}">🍅 ${r.tomatometer}</span>`;
   }
-  if (r.imdb) {
+  if (r && r.imdb) {
     const score = parseFloat(r.imdb);
     const cls = score >= 7 ? 'rt-fresh' : score >= 5 ? 'rt-mixed' : 'rt-rotten';
     html += `<span class="rt-badge ${cls}">⭐ ${r.imdb.replace('/10','')}</span>`;
   }
-  return html || '';
+  return html || '<span style="color:var(--muted);font-size:0.65rem">—</span>';
 }
 
 function updateRatingBadge(name, r) {
