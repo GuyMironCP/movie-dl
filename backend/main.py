@@ -155,27 +155,30 @@ async def search(q: str):
 
 # ── uTorrent ──────────────────────────────────────────────────────────────────
 
-async def _ut_token(cfg: dict) -> tuple[str, str, tuple | None]:
+async def ut_api(params: dict) -> dict:
+    """Call uTorrent WebUI API. Uses a single client so the GUID session
+    cookie from token.html is automatically included in the API request."""
+    cfg  = load_config()
     ut   = cfg["utorrent"]
     base = ut["url"]
     auth = (ut["username"], ut["password"]) if ut.get("password") else None
+    headers = {"Referer": f"{base}/gui/"}
+
     try:
-        async with httpx.AsyncClient(auth=auth, timeout=5) as client:
+        async with httpx.AsyncClient(auth=auth, timeout=10, headers=headers) as client:
+            # Step 1: fetch token (sets GUID cookie in client's jar)
             r = await client.get(f"{base}/gui/token.html")
             m = re.search(r"<div[^>]+id=['\"]token['\"][^>]*>([^<]+)", r.text)
             if not m:
                 raise HTTPException(500, "Could not read uTorrent token")
-            return base, m.group(1).strip(), auth
+            token = m.group(1).strip()
+
+            # Step 2: API call with same client (GUID cookie preserved)
+            r = await client.get(f"{base}/gui/", params={"token": token, **params})
+            r.raise_for_status()
+            return r.json()
     except httpx.ConnectError:
         raise HTTPException(503, "Cannot connect to uTorrent — make sure it's running with WebUI enabled (Options → Preferences → Web UI)")
-
-async def ut_api(params: dict) -> dict:
-    cfg = load_config()
-    base, token, auth = await _ut_token(cfg)
-    async with httpx.AsyncClient(auth=auth, timeout=10) as client:
-        r = await client.get(f"{base}/gui/", params={"token": token, **params})
-        r.raise_for_status()
-        return r.json()
 
 
 @app.post("/api/download")
