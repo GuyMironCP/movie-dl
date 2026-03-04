@@ -1,4 +1,5 @@
 """Movie Downloader — FastAPI backend."""
+import asyncio
 import json
 import re
 import shutil
@@ -195,6 +196,7 @@ async def download(body: dict):
         pending[info_hash] = {
             "name":     body.get("name", ""),
             "title":    body.get("title", ""),
+            "imdb":     body.get("imdb", ""),
             "added_at": time.time(),
             "copied":   False,
         }
@@ -220,8 +222,12 @@ async def list_torrents():
         h = hash_.upper()
         done = bool(status & 32)
 
-        if h in pending and done and load_config().get("auto_copy"):
-            _try_auto_copy(h, name)
+        p = pending.get(h, {})
+        # Trigger auto-copy+subtitle once when download completes
+        if h in pending and done and not p.get("auto_started") and load_config().get("auto_copy"):
+            pending[h]["auto_started"] = True
+            save_pending(pending)
+            asyncio.create_task(auto_copy_and_subtitle(h))
 
         torrents.append({
             "hash":       h,
@@ -230,26 +236,139 @@ async def list_torrents():
             "progress":   round(progress / 10, 1),
             "done":       done,
             "is_tracked": h in pending,
-            "copied":     pending.get(h, {}).get("copied", False),
+            "copied":     p.get("copied", False),
+            "auto_status": p.get("auto_status", ""),   # copying|subtitle|done|error
+            "auto_note":   p.get("auto_note", ""),
         })
 
     torrents.sort(key=lambda x: (not x["is_tracked"], not x["done"]))
     return {"torrents": torrents}
 
 
-def _try_auto_copy(info_hash: str, name: str):
-    """Attempt auto-copy synchronously (best-effort)."""
-    cfg = load_config()
+def _set_auto_status(info_hash: str, status: str, note: str = ""):
+    pending = load_pending()
+    if info_hash in pending:
+        pending[info_hash]["auto_status"] = status
+        if note:
+            pending[info_hash]["auto_note"] = note
+        save_pending(pending)
+
+
+async def auto_copy_and_subtitle(info_hash: str):
+    """Background task: copy completed torrent → download best Hebrew subtitle."""
+
+    _set_auto_status(info_hash, "copying")
+
+    # ── Step 1: Copy ──────────────────────────────────────────────────────
+    cfg           = load_config()
     movies_folder = Path(cfg.get("movies_folder", ""))
     if not movies_folder or not movies_folder.exists():
+        _set_auto_status(info_hash, "error", "Movies folder not set or unreachable")
         return
+
+    try:
+        data      = await ut_api({"action": "getprops", "hash": info_hash})
+        props     = data.get("props", [])
+        save_path = Path(props[0].get("path", "")) if props else Path()
+    except Exception as e:
+        _set_auto_status(info_hash, "error", f"uTorrent: {e}")
+        return
+
+    copied = []
+    try:
+        if save_path.is_file() and save_path.suffix.lower() in VIDEO_EXT:
+            dest = movies_folder / save_path.name
+            if not dest.exists():
+                shutil.copy2(save_path, dest)
+            copied.append(dest)
+        elif save_path.is_dir():
+            for f in save_path.rglob("*"):
+                if f.is_file() and f.suffix.lower() in VIDEO_EXT:
+                    dest = movies_folder / f.relative_to(save_path.parent)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+                    copied.append(dest)
+    except Exception as e:
+        _set_auto_status(info_hash, "error", f"Copy failed: {e}")
+        return
+
+    if not copied:
+        _set_auto_status(info_hash, "error", "No video files found to copy")
+        return
+
     pending = load_pending()
-    if pending.get(info_hash, {}).get("copied"):
+    if info_hash in pending:
+        pending[info_hash]["copied"] = True
+        save_pending(pending)
+
+    # Determine dest folder (for subtitle save)
+    dest_folder = copied[0].parent
+
+    # ── Step 2: Subtitle ──────────────────────────────────────────────────
+    api_key = cfg.get("opensubtitles", {}).get("api_key", "")
+    if not api_key:
+        _set_auto_status(info_hash, "done", "✓ Copied (no subtitle API key configured)")
         return
-    # We'll trigger via /api/copy endpoint from the UI instead
-    # (uTorrent getprops is async; mark for copy on next poll)
-    pending[info_hash]["needs_copy"] = True
-    save_pending(pending)
+
+    _set_auto_status(info_hash, "subtitle")
+
+    pending   = load_pending()
+    raw_name  = pending.get(info_hash, {}).get("name", "") or save_path.name
+    title     = clean_title(raw_name)
+    headers   = os_headers(cfg)
+
+    # Search (try IMDB id first if available, then title)
+    subs = []
+    try:
+        imdb_id = pending.get(info_hash, {}).get("imdb", "")
+        if imdb_id:
+            numeric = re.sub(r"\D", "", imdb_id)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{OS_BASE}/subtitles",
+                                params={"languages": "he", "imdb_id": numeric},
+                                headers=headers)
+            if r.status_code == 200:
+                subs = r.json().get("data", [])
+        if not subs:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{OS_BASE}/subtitles",
+                                params={"languages": "he", "query": title},
+                                headers=headers)
+            if r.status_code == 200:
+                subs = r.json().get("data", [])
+    except Exception as e:
+        _set_auto_status(info_hash, "done", f"✓ Copied — subtitle search failed: {e}")
+        return
+
+    if not subs:
+        _set_auto_status(info_hash, "done", "✓ Copied — no Hebrew subtitles found")
+        return
+
+    best    = max(subs, key=lambda x: x.get("attributes", {}).get("download_count", 0))
+    attrs   = best.get("attributes", {})
+    files   = attrs.get("files", [{}])
+    file_id = files[0].get("file_id") if files else None
+
+    if not file_id:
+        _set_auto_status(info_hash, "done", "✓ Copied — could not get subtitle file ID")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{OS_BASE}/download",
+                             json={"file_id": file_id},
+                             headers=os_headers(cfg, json_body=True))
+            if r.status_code != 200:
+                raise Exception(r.text)
+            link    = r.json()["link"]
+            content = (await c.get(link)).content
+
+        sub_path = dest_folder / (title + ".he.srt")
+        sub_path.write_bytes(content)
+        _set_auto_status(info_hash, "done", f"✓ Copied + subtitles saved")
+    except Exception as e:
+        _set_auto_status(info_hash, "done", f"✓ Copied — subtitle download failed: {e}")
 
 
 @app.post("/api/copy/{info_hash}")

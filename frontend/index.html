@@ -442,6 +442,7 @@ async function startDownload(idx) {
       info_hash: t.info_hash,
       name:      t.name,
       title:     t.title,
+      imdb:      t.imdb || '',
     });
 
     btn.innerHTML = '✓ Added';
@@ -703,19 +704,28 @@ function renderDownloads(torrents, error) {
     const pct  = t.progress.toFixed(1);
     const fill = `width:${pct}%`;
     const done = t.done;
-    const copiedLabel = t.copied
-      ? '<span style="color:#4ade80;font-size:0.78rem">✓ Copied to movies</span>'
-      : done
-        ? `<button class="btn btn-green btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy to Movies</button>`
-        : '';
+
+    let statusEl = '';
+    if (t.auto_status === 'copying') {
+      statusEl = '<span style="color:#fbbf24"><span class="spinner" style="width:13px;height:13px;border-width:2px"></span> Copying…</span>';
+    } else if (t.auto_status === 'subtitle') {
+      statusEl = '<span style="color:#818cf8"><span class="spinner" style="width:13px;height:13px;border-width:2px"></span> Getting subtitles…</span>';
+    } else if (t.auto_status === 'done') {
+      statusEl = `<span style="color:#4ade80;font-size:0.78rem">${escHtml(t.auto_note || '✓ Done')}</span>`;
+    } else if (t.auto_status === 'error') {
+      statusEl = `<span style="color:#f87171;font-size:0.78rem">⚠ ${escHtml(t.auto_note)}</span>`;
+    } else if (done && t.is_tracked && !t.copied) {
+      // auto_copy off or not yet triggered — show manual button
+      statusEl = `<button class="btn btn-green btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy to Movies</button>`;
+    }
 
     return `<div class="dl-row">
       <div>
         <div class="dl-name">${escHtml(t.name)}</div>
         <div class="progress-bar"><div class="progress-fill ${done ? 'done' : ''}" style="${fill}"></div></div>
-        <div class="dl-meta">${pct}% · ${t.size} ${done ? '· ✓ Complete' : ''}</div>
+        <div class="dl-meta">${pct}% · ${t.size}${done ? ' · ✓ Complete' : ''}</div>
       </div>
-      <div class="dl-actions">${copiedLabel}</div>
+      <div class="dl-actions">${statusEl}</div>
     </div>`;
   }).join('');
 }
