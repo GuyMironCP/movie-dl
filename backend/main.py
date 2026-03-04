@@ -576,6 +576,11 @@ async def movie_rating(title: str):
     result: dict = {"tomatometer": None, "popcornmeter": None, "imdb": None}
     cfg = load_config()
 
+    bh = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     # ── OMDB: Tomatometer (critics) + IMDB score ──────────────────────────
     omdb_key = cfg.get("omdb_api_key", "")
     if omdb_key:
@@ -588,8 +593,7 @@ async def movie_rating(title: str):
                 data = r.json()
                 if data.get("Response") == "True":
                     for rating in data.get("Ratings", []):
-                        src = rating.get("Source", "")
-                        val = rating.get("Value", "")
+                        src, val = rating.get("Source", ""), rating.get("Value", "")
                         if src == "Rotten Tomatoes":
                             result["tomatometer"] = val
                         elif src == "Internet Movie Database":
@@ -597,28 +601,40 @@ async def movie_rating(title: str):
         except Exception:
             pass
 
-    # ── RT unofficial API: Popcornmeter (audience score) ──────────────────
+    # ── RT: Tomatometer (meterScore) + Popcornmeter (audience page scrape) ──
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as c:
-            r = await c.get(RT_SEARCH, params={"q": clean, "limit": 5}, headers=headers)
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=bh) as c:
+            # Step 1: search — gives us meterScore and movie slug
+            r = await c.get(RT_SEARCH, params={"q": clean, "limit": 5})
+            movie_slug = None
             if r.status_code == 200:
-                movies = r.json().get("movies", [])
-                for m in movies:
+                for m in r.json().get("movies", []):
                     m_name = m.get("name", "").lower()
                     if clean.lower() in m_name or m_name in clean.lower():
-                        score = m.get("audienceScore")
-                        if score is not None:
-                            result["popcornmeter"] = f"{score}%"
-                        # Use RT tomatometer too if OMDB didn't provide it
                         if not result["tomatometer"]:
-                            ts = m.get("meterScore")
-                            if ts is not None:
-                                result["tomatometer"] = f"{ts}%"
+                            meter = m.get("meterScore")
+                            if meter is not None:
+                                result["tomatometer"] = f"{meter}%"
+                        # audienceScore is rarely in search results, but try
+                        audience = m.get("audienceScore")
+                        if audience is not None:
+                            result["popcornmeter"] = f"{audience}%"
+                        movie_slug = m.get("url", "")
                         break
+
+            # Step 2: fetch movie detail page to get audience score
+            if movie_slug and not result["popcornmeter"]:
+                pr = await c.get(f"https://www.rottentomatoes.com{movie_slug}")
+                if pr.status_code == 200:
+                    for pat in [
+                        r'"audienceScore"\s*:\s*\{\s*"score"\s*:\s*"?(\d+)"?',
+                        r'"popcornScore"\s*:\s*"?(\d+)"?',
+                        r'audienceScore[^0-9]{1,20}(\d{1,3})',
+                    ]:
+                        am = re.search(pat, pr.text)
+                        if am:
+                            result["popcornmeter"] = f"{am.group(1)}%"
+                            break
     except Exception:
         pass
 

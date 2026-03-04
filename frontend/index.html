@@ -777,8 +777,8 @@ function renderDownloads(torrents, error) {
       statusEl = `<span style="color:#f87171;font-size:0.78rem">⚠ ${escHtml(t.auto_note)}</span>`;
     }
 
-    // Manual copy button always visible for completed tracked torrents (except while auto-copying)
-    const copyBtn = (done && t.is_tracked && t.auto_status !== 'copying')
+    // Manual copy button for all completed torrents (except while auto-copy is running)
+    const copyBtn = (done && t.auto_status !== 'copying')
       ? `<button class="btn btn-ghost btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy</button>`
       : '';
 
