@@ -303,12 +303,13 @@ async def copy_torrent(info_hash: str):
 
 OS_BASE = "https://api.opensubtitles.com/api/v1"
 
-def os_headers(cfg: dict) -> dict:
+def os_headers(cfg: dict, json_body: bool = False) -> dict:
     h = {
-        "Api-Key":      cfg.get("opensubtitles", {}).get("api_key", ""),
-        "User-Agent":   "MovieDL v1.0",
-        "Content-Type": "application/json",
+        "Api-Key":    cfg.get("opensubtitles", {}).get("api_key", ""),
+        "User-Agent": "MovieDL v1.0",
     }
+    if json_body:
+        h["Content-Type"] = "application/json"
     token = cfg.get("opensubtitles", {}).get("token", "")
     if token:
         h["Authorization"] = f"Bearer {token}"
@@ -328,7 +329,7 @@ async def os_login():
         r = await client.post(
             f"{OS_BASE}/login",
             json={"username": cred["username"], "password": cred["password"]},
-            headers=os_headers(cfg),
+            headers=os_headers(cfg, json_body=True),
         )
         if r.status_code != 200:
             raise HTTPException(r.status_code, f"Login failed: {r.text}")
@@ -345,22 +346,25 @@ async def search_subtitles(q: str, imdb_id: str = ""):
     if not cfg.get("opensubtitles", {}).get("api_key"):
         raise HTTPException(400, "OpenSubtitles API key not configured. Add it in Settings.")
 
-    params: dict = {"languages": "he"}
-    if imdb_id:
-        numeric = re.sub(r"\D", "", imdb_id)
-        if numeric:
-            params["imdb_id"] = numeric
-    if "imdb_id" not in params:
-        params["query"] = q
+    headers = os_headers(cfg)
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"{OS_BASE}/subtitles", params=params, headers=os_headers(cfg))
+    async def _search(params: dict):
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{OS_BASE}/subtitles", params=params, headers=headers)
+        if r.status_code != 200:
+            raise HTTPException(r.status_code, f"OpenSubtitles: {r.text}")
+        return r.json().get("data", [])
 
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, f"OpenSubtitles: {r.text}")
+    # Try by IMDB id first; fall back to title query if no results
+    data = []
+    numeric_imdb = re.sub(r"\D", "", imdb_id) if imdb_id else ""
+    if numeric_imdb:
+        data = await _search({"languages": "he", "imdb_id": numeric_imdb})
+    if not data:
+        data = await _search({"languages": "he", "query": q})
 
     subs = []
-    for sub in r.json().get("data", []):
+    for sub in data:
         attrs = sub.get("attributes", {})
         files = attrs.get("files", [{}])
         subs.append({
@@ -395,7 +399,7 @@ async def download_subtitle(body: dict):
         r = await client.post(
             f"{OS_BASE}/download",
             json={"file_id": file_id},
-            headers=os_headers(cfg),
+            headers=os_headers(cfg, json_body=True),
         )
         if r.status_code != 200:
             raise HTTPException(r.status_code, f"OpenSubtitles: {r.text}")
@@ -416,6 +420,21 @@ async def download_subtitle(body: dict):
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+
+# ── Movies folders ────────────────────────────────────────────────────────────
+
+@app.get("/api/movies-folders")
+def list_movies_folders():
+    cfg    = load_config()
+    root   = Path(cfg.get("movies_folder", ""))
+    if not root or not root.exists():
+        return {"folders": [], "root": str(root), "accessible": False}
+    folders = sorted(
+        [{"name": p.name, "path": str(p)} for p in root.iterdir() if p.is_dir()],
+        key=lambda x: x["name"].lower(),
+    )
+    return {"folders": folders, "root": str(root), "accessible": True}
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

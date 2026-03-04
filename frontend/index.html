@@ -192,6 +192,18 @@
       <span class="count" id="sub-count">0</span>
     </div>
     <div id="sub-body"></div>
+
+    <!-- Save destination -->
+    <div id="sub-dest" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+      <div class="card-title" style="margin-bottom:8px">📁 Save subtitle to</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="folder-select" style="flex:1;min-width:200px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 10px;color:var(--text);font-size:0.85rem">
+          <option value="">⏳ Loading folders…</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="loadFolders()">🔄</button>
+      </div>
+      <div id="folder-error" style="font-size:0.75rem;color:#f87171;margin-top:5px;display:none"></div>
+    </div>
   </div>
 
   <!-- DOWNLOADS -->
@@ -254,8 +266,9 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-let selectedTorrent = null;   // currently selected result row
+let selectedTorrent = null;
 let dlTimer = null;
+let moviesFolders = [];   // cached folder list
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function toast(msg, type = '') {
@@ -403,6 +416,35 @@ async function startDownload(idx) {
   }
 }
 
+// ── Folders ───────────────────────────────────────────────────────────────
+async function loadFolders() {
+  const sel    = document.getElementById('folder-select');
+  const errEl  = document.getElementById('folder-error');
+  errEl.style.display = 'none';
+
+  try {
+    const { folders, root, accessible } = await api('GET', '/api/movies-folders');
+    moviesFolders = folders;
+
+    if (!accessible) {
+      sel.innerHTML = '<option value="">⚠️ Movies folder not accessible</option>';
+      errEl.textContent = 'BeeStation may be offline or movies folder not set.';
+      errEl.style.display = '';
+      return;
+    }
+
+    const opts = [`<option value="${escHtml(root)}">📂 Root — ${escHtml(root)}</option>`];
+    folders.forEach(f => {
+      opts.push(`<option value="${escHtml(f.path)}">📁 ${escHtml(f.name)}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">⚠️ Could not load folders</option>';
+    errEl.textContent = e.message;
+    errEl.style.display = '';
+  }
+}
+
 // ── Subtitles ─────────────────────────────────────────────────────────────
 async function searchSubtitles(title, imdbId = '') {
   const card = document.getElementById('sub-card');
@@ -417,6 +459,10 @@ async function searchSubtitles(title, imdbId = '') {
     const params = `q=${encodeURIComponent(title)}${imdbId ? `&imdb_id=${encodeURIComponent(imdbId)}` : ''}`;
     const { subtitles } = await api('GET', `/api/subtitles?${params}`);
     renderSubtitles(subtitles, title);
+    if (subtitles.length) {
+      document.getElementById('sub-dest').style.display = '';
+      loadFolders();
+    }
   } catch (e) {
     body.innerHTML = `<div class="empty"><div class="icon">⚠️</div>${escHtml(e.message)}</div>`;
     document.getElementById('sub-count').textContent = '0';
@@ -459,17 +505,18 @@ async function downloadSubtitle(fileId, origFilename, suggestedName, btn) {
   btn.innerHTML = '<span class="spinner"></span>';
   btn.disabled  = true;
 
-  // Ask the user to confirm / change filename
-  const fname = prompt('Save subtitle as:', suggestedName);
+  const saveDir = document.getElementById('folder-select')?.value || '';
+  const fname   = prompt('Save subtitle as:', suggestedName);
   if (!fname) { btn.innerHTML = '💾 Save'; btn.disabled = false; return; }
 
   try {
     const res = await api('POST', '/api/subtitle/download', {
       file_id:  fileId,
       filename: fname,
+      save_dir: saveDir,
     });
     if (res.path) {
-      toast(`Subtitle saved → ${res.path}  (quota left: ${res.remaining_quota}/day)`, 'ok');
+      toast(`Saved → ${res.path}  (quota left: ${res.remaining_quota}/day)`, 'ok');
       btn.innerHTML = '✓ Saved';
       btn.style.background = '#374151';
     }
