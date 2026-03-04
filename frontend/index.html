@@ -94,6 +94,24 @@
     .sub-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
     .sub-dl-count { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
 
+    /* ── MY MOVIES ── */
+    .movies-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+    }
+    .movie-card {
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px; padding: 12px; cursor: pointer; transition: all 0.15s;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .movie-card:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.16); }
+    .movie-card-name { font-size: 0.85rem; font-weight: 600; line-height: 1.3; word-break: break-word; }
+    .movie-card-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+    .sub-badge-ok  { background: rgba(22,163,74,0.2);  color: #86efac; border: 1px solid rgba(22,163,74,0.3);  border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; font-weight: 700; }
+    .sub-badge-miss{ background: rgba(234,179,8,0.15); color: #fde047; border: 1px solid rgba(234,179,8,0.3);  border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; font-weight: 700; }
+    .movie-card-action { font-size: 0.75rem; color: #818cf8; margin-top: 2px; }
+
     /* ── FOLDER LIST ── */
     .folder-list {
       display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
@@ -197,6 +215,21 @@
       <span class="count" id="results-count">0</span>
     </div>
     <div id="results-body"></div>
+  </div>
+
+  <!-- MY MOVIES -->
+  <div class="card" id="my-movies-card">
+    <div class="card-title">
+      🎬 My Movies
+      <span class="count" id="my-movies-count">…</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadMyMovies()">🔄</button>
+    </div>
+    <input type="text" id="movies-filter" placeholder="Filter movies…"
+           oninput="filterMovies(this.value)"
+           style="width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;margin-bottom:12px"/>
+    <div id="my-movies-body">
+      <div class="empty"><span class="spinner"></span> Loading…</div>
+    </div>
   </div>
 
   <!-- SUBTITLES -->
@@ -432,6 +465,80 @@ async function startDownload(idx) {
   }
 }
 
+// ── My Movies ─────────────────────────────────────────────────────────────
+let allMovies = [];
+
+async function loadMyMovies() {
+  const body  = document.getElementById('my-movies-body');
+  const count = document.getElementById('my-movies-count');
+  body.innerHTML = '<div class="empty"><span class="spinner"></span> Loading…</div>';
+
+  try {
+    const { folders, accessible } = await api('GET', '/api/movies-folders');
+    if (!accessible) {
+      body.innerHTML = '<div class="empty">⚠️ Movies folder not accessible (BeeStation offline?)</div>';
+      count.textContent = '0';
+      return;
+    }
+    allMovies = folders;
+    count.textContent = folders.length;
+    renderMovies(folders);
+  } catch (e) {
+    body.innerHTML = `<div class="empty">⚠️ ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderMovies(movies) {
+  const body = document.getElementById('my-movies-body');
+  if (!movies.length) {
+    body.innerHTML = '<div class="empty">No movies found</div>';
+    return;
+  }
+  body.innerHTML = '<div class="movies-grid">' +
+    movies.map(m => `
+      <div class="movie-card" onclick="findSubsForMovie('${escHtml(m.name)}', '${escHtml(m.path)}')">
+        <div class="movie-card-name">${escHtml(m.name)}</div>
+        <div class="movie-card-badges">
+          ${m.has_subtitle
+            ? '<span class="sub-badge-ok">✓ Subtitles</span>'
+            : '<span class="sub-badge-miss">No subtitles</span>'}
+        </div>
+        <div class="movie-card-action">Click to find Hebrew subtitles →</div>
+      </div>`
+    ).join('') + '</div>';
+}
+
+function filterMovies(q) {
+  const filtered = q
+    ? allMovies.filter(m => m.name.toLowerCase().includes(q.toLowerCase()))
+    : allMovies;
+  document.getElementById('my-movies-count').textContent = filtered.length;
+  renderMovies(filtered);
+}
+
+function findSubsForMovie(name, folderPath) {
+  // Pre-select the folder
+  selectedSaveFolder = folderPath;
+  // Open subtitle section and search
+  document.getElementById('sub-card').style.display = '';
+  document.getElementById('sub-movie-name').textContent = `— ${name}`;
+  document.getElementById('sub-body').innerHTML =
+    '<div class="empty"><span class="spinner"></span> Searching Hebrew subtitles…</div>';
+  document.getElementById('sub-count').textContent = '0';
+  window.scrollTo({ top: document.getElementById('sub-card').offsetTop - 20, behavior: 'smooth' });
+
+  // Search and load folders (folder list will auto-select the right one)
+  api('GET', `/api/subtitles?q=${encodeURIComponent(name)}`)
+    .then(({ subtitles }) => {
+      renderSubtitles(subtitles, name);
+      loadFolders();
+    })
+    .catch(e => {
+      document.getElementById('sub-body').innerHTML =
+        `<div class="empty"><div class="icon">⚠️</div>${escHtml(e.message)}</div>`;
+    });
+}
+
 // ── Folders ───────────────────────────────────────────────────────────────
 let selectedSaveFolder = '';   // path of selected folder
 
@@ -458,7 +565,7 @@ async function loadFolders() {
     wrap.innerHTML = '<div class="folder-list" id="folder-list"></div>';
     const list = document.getElementById('folder-list');
 
-    // Default to root
+    // Default to root if nothing pre-selected
     if (!selectedSaveFolder) selectFolder(root, '📂 Root');
 
     allFolders.forEach(f => {
@@ -684,6 +791,7 @@ function escHtml(s) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
+loadMyMovies();
 loadDownloads();
 dlTimer = setInterval(loadDownloads, 15000);
 </script>

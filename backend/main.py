@@ -270,7 +270,6 @@ async def copy_torrent(info_hash: str):
     except Exception as e:
         raise HTTPException(500, f"uTorrent error: {e}")
 
-    VIDEO_EXT = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".wmv", ".flv"}
     copied = []
 
     if save_path.is_file():
@@ -424,16 +423,33 @@ async def download_subtitle(body: dict):
 
 # ── Movies folders ────────────────────────────────────────────────────────────
 
+VIDEO_EXT    = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".wmv", ".flv"}
+SUBTITLE_EXT = {".srt", ".sub", ".ass", ".ssa"}
+
 @app.get("/api/movies-folders")
 def list_movies_folders():
-    cfg    = load_config()
-    root   = Path(cfg.get("movies_folder", ""))
+    cfg  = load_config()
+    root = Path(cfg.get("movies_folder", ""))
     if not root or not root.exists():
         return {"folders": [], "root": str(root), "accessible": False}
-    folders = sorted(
-        [{"name": p.name, "path": str(p)} for p in root.iterdir() if p.is_dir()],
-        key=lambda x: x["name"].lower(),
-    )
+
+    folders = []
+    for p in sorted(root.iterdir(), key=lambda x: x.name.lower()):
+        if not p.is_dir():
+            continue
+        try:
+            files        = list(p.iterdir())
+            has_video    = any(f.suffix.lower() in VIDEO_EXT for f in files)
+            has_subtitle = any(f.suffix.lower() in SUBTITLE_EXT for f in files)
+        except PermissionError:
+            has_video = has_subtitle = False
+        folders.append({
+            "name":         p.name,
+            "path":         str(p),
+            "has_video":    has_video,
+            "has_subtitle": has_subtitle,
+        })
+
     return {"folders": folders, "root": str(root), "accessible": True}
 
 
