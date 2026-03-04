@@ -1,7 +1,7 @@
 """
 Movie Downloader launcher.
 
-  python start.py   — starts server and opens browser at http://localhost:9000
+  python start.py   — starts server and opens browser at http://localhost:9090
 """
 import subprocess
 import sys
@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT    = Path(__file__).parent
 BACKEND = ROOT / "backend"
 REQ     = ROOT / "requirements.txt"
-PORT    = 9000
+PORT    = 9090
 URL     = f"http://localhost:{PORT}"
 
 
