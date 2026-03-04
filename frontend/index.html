@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Movie Downloader</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f172a;
+      --surface:  #1e293b;
+      --border:   rgba(255,255,255,0.08);
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --accent:   #4f46e5;
+      --green:    #16a34a;
+      --red:      #dc2626;
+      --yellow:   #ca8a04;
+    }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* ── HEADER ── */
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 1.15rem; font-weight: 800; color: #fff; }
+    header h1 span { color: #818cf8; }
+    .header-right { margin-left: auto; display: flex; gap: 10px; }
+    .btn { border: none; border-radius: 9px; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary  { background: var(--accent); color: #fff; }
+    .btn-primary:hover  { background: #4338ca; }
+    .btn-ghost   { background: rgba(255,255,255,0.07); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover  { background: rgba(255,255,255,0.12); }
+    .btn-green   { background: var(--green); color: #fff; }
+    .btn-green:hover { background: #15803d; }
+    .btn-sm { padding: 5px 11px; font-size: 0.78rem; border-radius: 7px; }
+
+    /* ── MAIN ── */
+    main { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+
+    /* ── SEARCH ── */
+    #search-section { margin-bottom: 28px; }
+    .search-box {
+      display: flex; gap: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 10px 14px; align-items: center;
+    }
+    .search-box input {
+      flex: 1; background: none; border: none; outline: none;
+      font-size: 1.05rem; color: var(--text); min-width: 0;
+    }
+    .search-box input::placeholder { color: var(--muted); }
+    .search-box .btn { flex-shrink: 0; }
+
+    /* ── CARDS ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+    .card-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .card-title .count { background: rgba(255,255,255,0.08); border-radius: 20px; padding: 1px 8px; font-size: 0.7rem; }
+
+    /* ── RESULTS TABLE ── */
+    .results-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    .results-table th {
+      text-align: left; padding: 8px 10px; font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .results-table td { padding: 10px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+    .results-table tr:last-child td { border-bottom: none; }
+    .results-table tr:hover td { background: rgba(255,255,255,0.025); }
+    .results-table tr.selected td { background: rgba(79,70,229,0.12); }
+
+    .movie-name { font-weight: 600; color: var(--text); line-height: 1.3; }
+    .movie-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+
+    /* Quality & source badges */
+    .badge { display: inline-block; border-radius: 5px; padding: 1px 6px; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.3px; white-space: nowrap; }
+    .badge-4k     { background: rgba(234,179,8,0.2);  color: #fde047; border: 1px solid rgba(234,179,8,0.3); }
+    .badge-1080p  { background: rgba(79,70,229,0.2);  color: #a5b4fc; border: 1px solid rgba(79,70,229,0.3); }
+    .badge-720p   { background: rgba(22,163,74,0.2);  color: #86efac; border: 1px solid rgba(22,163,74,0.3); }
+    .badge-sd     { background: rgba(100,116,139,0.2);color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
+    .badge-bluray { background: rgba(139,92,246,0.2); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.3); }
+    .badge-webdl  { background: rgba(14,165,233,0.2); color: #7dd3fc; border: 1px solid rgba(14,165,233,0.3); }
+    .badge-src    { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+
+    .seeders-cell { font-weight: 700; color: #4ade80; white-space: nowrap; }
+    .seeders-cell.low { color: #fbbf24; }
+    .seeders-cell.dead { color: #f87171; }
+
+    /* ── SUBTITLES ── */
+    .sub-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .sub-row:last-child { border-bottom: none; }
+    .sub-release { flex: 1; font-size: 0.85rem; line-height: 1.3; }
+    .sub-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+    .sub-dl-count { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+
+    /* ── DOWNLOADS ── */
+    .dl-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .dl-row:last-child { border-bottom: none; }
+    .dl-name { font-size: 0.88rem; font-weight: 600; margin-bottom: 5px; }
+    .progress-bar { height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+    .progress-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.5s; }
+    .progress-fill.done { background: var(--green); }
+    .dl-meta { font-size: 0.72rem; color: var(--muted); }
+    .dl-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+    /* ── EMPTY STATES ── */
+    .empty { padding: 28px 0; text-align: center; color: var(--muted); font-size: 0.88rem; }
+    .empty .icon { font-size: 2.5rem; margin-bottom: 8px; }
+
+    /* ── SPINNER ── */
+    .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── TOAST ── */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: #334155; color: #fff; border-radius: 12px; padding: 12px 20px;
+      font-size: 0.88rem; font-weight: 600; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      transition: transform 0.3s; z-index: 9000; white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.ok   { background: #166534; }
+    #toast.err  { background: #7f1d1d; }
+
+    /* ── MODAL (Settings) ── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 8000;
+      display: none; align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1e293b; border-radius: 18px; padding: 28px;
+      width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .modal h2 { font-size: 1rem; font-weight: 700; margin-bottom: 20px; }
+    .modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 5px; }
+    .field input, .field select {
+      width: 100%; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 0.88rem;
+    }
+    .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+    .field-note { font-size: 0.75rem; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .field-note a { color: #818cf8; }
+    .section-sep { border-top: 1px solid var(--border); margin: 18px 0 14px; padding-top: 14px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+
+    /* Responsive */
+    @media (max-width: 700px) {
+      .results-table .hide-mobile { display: none; }
+      .dl-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎬 Movie <span>Downloader</span></h1>
+  <div class="header-right">
+    <button class="btn btn-ghost" onclick="loadDownloads()">🔄 Refresh</button>
+    <button class="btn btn-ghost" onclick="openSettings()">⚙️ Settings</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- SEARCH -->
+  <div id="search-section">
+    <div class="search-box">
+      <input type="text" id="search-input" placeholder="Search for a movie or series…" autocomplete="off"
+             onkeydown="if(event.key==='Enter') doSearch()"/>
+      <button class="btn btn-primary" id="search-btn" onclick="doSearch()">🔍 Search</button>
+    </div>
+  </div>
+
+  <!-- SEARCH RESULTS -->
+  <div class="card" id="results-card" style="display:none">
+    <div class="card-title">
+      Search Results
+      <span class="count" id="results-count">0</span>
+    </div>
+    <div id="results-body"></div>
+  </div>
+
+  <!-- SUBTITLES -->
+  <div class="card" id="sub-card" style="display:none">
+    <div class="card-title">
+      🇮🇱 Hebrew Subtitles
+      <span id="sub-movie-name" style="font-weight:600;color:#e2e8f0;text-transform:none;letter-spacing:0;font-size:0.82rem"></span>
+      <span class="count" id="sub-count">0</span>
+    </div>
+    <div id="sub-body"></div>
+  </div>
+
+  <!-- DOWNLOADS -->
+  <div class="card" id="dl-card">
+    <div class="card-title">
+      📥 Downloads
+      <span class="count" id="dl-count">0</span>
+    </div>
+    <div id="dl-body">
+      <div class="empty"><div class="icon">📭</div>No tracked downloads</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay" id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeSettings()">✕</button>
+    <h2>⚙️ Settings</h2>
+
+    <div class="section-sep">uTorrent WebUI</div>
+    <div class="field">
+      <label>WebUI URL</label>
+      <input type="text" id="cfg-ut-url" placeholder="http://127.0.0.1:8080"/>
+      <div class="field-note">Enable in uTorrent: Options → Preferences → Web UI</div>
+    </div>
+    <div class="field"><label>Username</label><input type="text" id="cfg-ut-user" placeholder="admin"/></div>
+    <div class="field"><label>Password</label><input type="password" id="cfg-ut-pass" placeholder="Leave empty if none"/></div>
+
+    <div class="section-sep">OpenSubtitles</div>
+    <div class="field">
+      <label>API Key</label>
+      <input type="text" id="cfg-os-key" placeholder="Paste your API key here"/>
+      <div class="field-note">
+        Free key at <a href="https://www.opensubtitles.com/consumers" target="_blank">opensubtitles.com/consumers</a>
+        (requires free account · 20 downloads/day)
+      </div>
+    </div>
+    <div class="field"><label>Username (optional — raises quota)</label><input type="text" id="cfg-os-user"/></div>
+    <div class="field"><label>Password</label><input type="password" id="cfg-os-pass"/></div>
+    <button class="btn btn-ghost btn-sm" onclick="osLogin()">Test / Login to OpenSubtitles</button>
+
+    <div class="section-sep">Folders</div>
+    <div class="field">
+      <label>Movies Storage Folder</label>
+      <input type="text" id="cfg-movies" placeholder="e.g. D:\Movies"/>
+      <div class="field-note">Completed downloads will be copied here automatically.</div>
+    </div>
+
+    <div style="margin-top:20px; display:flex; gap:10px">
+      <button class="btn btn-primary" onclick="saveSettings()" style="flex:1">Save Settings</button>
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let selectedTorrent = null;   // currently selected result row
+let dlTimer = null;
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+// ── API helper ────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+// ── Search ────────────────────────────────────────────────────────────────
+async function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+
+  const btn = document.getElementById('search-btn');
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled = true;
+
+  try {
+    const { results } = await api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+    renderResults(results, q);
+  } catch (e) {
+    toast('Search failed: ' + e.message, 'err');
+  } finally {
+    btn.innerHTML = '🔍 Search';
+    btn.disabled = false;
+  }
+}
+
+function qualityBadge(q) {
+  const map = { '4K': 'badge-4k', '1080p': 'badge-1080p', '720p': 'badge-720p' };
+  return `<span class="badge ${map[q] || 'badge-sd'}">${q}</span>`;
+}
+
+function sourceBadge(s) {
+  if (!s) return '';
+  const map = { 'BluRay': 'badge-bluray', 'WEB-DL': 'badge-webdl', 'WEBRip': 'badge-webdl' };
+  return `<span class="badge ${map[s] || 'badge-src'}" style="margin-left:4px">${s}</span>`;
+}
+
+function seedersCell(n) {
+  const cls = n >= 50 ? '' : n >= 10 ? 'low' : 'dead';
+  return `<span class="seeders-cell ${cls}">▲ ${n.toLocaleString()}</span>`;
+}
+
+function renderResults(results, query) {
+  const card  = document.getElementById('results-card');
+  const body  = document.getElementById('results-body');
+  const count = document.getElementById('results-count');
+
+  if (!results.length) {
+    body.innerHTML = '<div class="empty"><div class="icon">🔍</div>No results found on The Pirate Bay</div>';
+    count.textContent = '0';
+    card.style.display = '';
+    return;
+  }
+
+  count.textContent = results.length;
+  body.innerHTML = `
+    <table class="results-table">
+      <thead>
+        <tr>
+          <th>Movie</th>
+          <th class="hide-mobile">Quality</th>
+          <th class="hide-mobile">Size</th>
+          <th>Seeds</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="results-tbody">
+      </tbody>
+    </table>`;
+
+  const tbody = document.getElementById('results-tbody');
+  results.forEach((t, i) => {
+    const tr = document.createElement('tr');
+    tr.id = `row-${t.id}`;
+    tr.innerHTML = `
+      <td>
+        <div class="movie-name">${escHtml(t.title || t.name)}</div>
+        <div class="movie-meta">${escHtml(t.name)}</div>
+      </td>
+      <td class="hide-mobile">${qualityBadge(t.quality)}${sourceBadge(t.source)}</td>
+      <td class="hide-mobile" style="color:var(--muted);white-space:nowrap">${t.size}</td>
+      <td>${seedersCell(t.seeders)}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" id="dl-btn-${t.id}" onclick="startDownload(${i})">
+          ⬇️ Download
+        </button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  card.style.display = '';
+  window._results = results;
+}
+
+// ── Download ──────────────────────────────────────────────────────────────
+async function startDownload(idx) {
+  const t   = window._results[idx];
+  const btn = document.getElementById(`dl-btn-${t.id}`);
+
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled  = true;
+
+  try {
+    await api('POST', '/api/download', {
+      magnet:    t.magnet,
+      info_hash: t.info_hash,
+      name:      t.name,
+      title:     t.title,
+    });
+
+    btn.innerHTML = '✓ Added';
+    btn.style.background = 'var(--green)';
+
+    // Highlight selected row
+    document.querySelectorAll('.results-table tr').forEach(r => r.classList.remove('selected'));
+    document.getElementById(`row-${t.id}`)?.classList.add('selected');
+    selectedTorrent = t;
+
+    toast(`Added to uTorrent: ${t.title}`, 'ok');
+    loadDownloads();
+
+    // Auto-search subtitles
+    searchSubtitles(t.title, t.imdb);
+
+  } catch (e) {
+    toast('Download failed: ' + e.message, 'err');
+    btn.innerHTML = '⬇️ Download';
+    btn.disabled  = false;
+  }
+}
+
+// ── Subtitles ─────────────────────────────────────────────────────────────
+async function searchSubtitles(title, imdbId = '') {
+  const card = document.getElementById('sub-card');
+  const body = document.getElementById('sub-body');
+  const nameEl = document.getElementById('sub-movie-name');
+
+  nameEl.textContent = `— ${title}`;
+  body.innerHTML = '<div class="empty"><span class="spinner"></span> Searching Hebrew subtitles…</div>';
+  card.style.display = '';
+
+  try {
+    const params = `q=${encodeURIComponent(title)}${imdbId ? `&imdb_id=${encodeURIComponent(imdbId)}` : ''}`;
+    const { subtitles } = await api('GET', `/api/subtitles?${params}`);
+    renderSubtitles(subtitles, title);
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><div class="icon">⚠️</div>${escHtml(e.message)}</div>`;
+    document.getElementById('sub-count').textContent = '0';
+  }
+}
+
+function renderSubtitles(subs, movieTitle) {
+  const body  = document.getElementById('sub-body');
+  const count = document.getElementById('sub-count');
+  count.textContent = subs.length;
+
+  if (!subs.length) {
+    body.innerHTML = '<div class="empty"><div class="icon">😕</div>No Hebrew subtitles found</div>';
+    return;
+  }
+
+  // Build suggested save filename from selected torrent or movie title
+  const saveName = selectedTorrent
+    ? selectedTorrent.name + '.he.srt'
+    : (movieTitle + '.he.srt');
+
+  body.innerHTML = subs.slice(0, 15).map(s => `
+    <div class="sub-row">
+      <div style="flex:1">
+        <div class="sub-release">${escHtml(s.release)}</div>
+        <div class="sub-meta">
+          By ${escHtml(s.uploader)}
+          ${s.fps ? ` · ${s.fps} FPS` : ''}
+          ${s.hearing_impaired ? ' · 🦻' : ''}
+        </div>
+      </div>
+      <div class="sub-dl-count">⬇ ${s.downloads.toLocaleString()}</div>
+      <button class="btn btn-green btn-sm" onclick="downloadSubtitle(${s.file_id}, '${escHtml(s.filename)}', '${escHtml(saveName)}', this)">
+        💾 Save
+      </button>
+    </div>`).join('');
+}
+
+async function downloadSubtitle(fileId, origFilename, suggestedName, btn) {
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled  = true;
+
+  // Ask the user to confirm / change filename
+  const fname = prompt('Save subtitle as:', suggestedName);
+  if (!fname) { btn.innerHTML = '💾 Save'; btn.disabled = false; return; }
+
+  try {
+    const res = await api('POST', '/api/subtitle/download', {
+      file_id:  fileId,
+      filename: fname,
+    });
+    if (res.path) {
+      toast(`Subtitle saved → ${res.path}  (quota left: ${res.remaining_quota}/day)`, 'ok');
+      btn.innerHTML = '✓ Saved';
+      btn.style.background = '#374151';
+    }
+  } catch (e) {
+    toast('Subtitle download failed: ' + e.message, 'err');
+    btn.innerHTML = '💾 Save';
+    btn.disabled = false;
+  }
+}
+
+// ── Downloads monitor ─────────────────────────────────────────────────────
+async function loadDownloads() {
+  try {
+    const { torrents, error } = await api('GET', '/api/torrents');
+    renderDownloads(torrents, error);
+  } catch (e) {
+    renderDownloads([], e.message);
+  }
+}
+
+function renderDownloads(torrents, error) {
+  const body  = document.getElementById('dl-body');
+  const count = document.getElementById('dl-count');
+  count.textContent = torrents.length;
+
+  if (error && !torrents.length) {
+    body.innerHTML = `<div class="empty"><div class="icon">⚠️</div>${escHtml(error)}</div>`;
+    return;
+  }
+  if (!torrents.length) {
+    body.innerHTML = '<div class="empty"><div class="icon">📭</div>No active downloads</div>';
+    return;
+  }
+
+  body.innerHTML = torrents.map(t => {
+    const pct  = t.progress.toFixed(1);
+    const fill = `width:${pct}%`;
+    const done = t.done;
+    const copiedLabel = t.copied
+      ? '<span style="color:#4ade80;font-size:0.78rem">✓ Copied to movies</span>'
+      : done
+        ? `<button class="btn btn-green btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy to Movies</button>`
+        : '';
+
+    return `<div class="dl-row">
+      <div>
+        <div class="dl-name">${escHtml(t.name)}</div>
+        <div class="progress-bar"><div class="progress-fill ${done ? 'done' : ''}" style="${fill}"></div></div>
+        <div class="dl-meta">${pct}% · ${t.size} ${done ? '· ✓ Complete' : ''}</div>
+      </div>
+      <div class="dl-actions">${copiedLabel}</div>
+    </div>`;
+  }).join('');
+}
+
+async function copyTorrent(hash, btn) {
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled  = true;
+  try {
+    const { copied } = await api('POST', `/api/copy/${hash}`);
+    toast(`Copied ${copied.length} file(s) to movies folder ✓`, 'ok');
+    loadDownloads();
+  } catch (e) {
+    toast('Copy failed: ' + e.message, 'err');
+    btn.innerHTML = '📁 Copy to Movies';
+    btn.disabled = false;
+  }
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────
+async function openSettings() {
+  try {
+    const cfg = await api('GET', '/api/config');
+    document.getElementById('cfg-ut-url').value  = cfg.utorrent?.url      || '';
+    document.getElementById('cfg-ut-user').value = cfg.utorrent?.username  || '';
+    document.getElementById('cfg-ut-pass').value = cfg.utorrent?.password  || '';
+    document.getElementById('cfg-os-key').value  = cfg.opensubtitles?.api_key  || '';
+    document.getElementById('cfg-os-user').value = cfg.opensubtitles?.username || '';
+    document.getElementById('cfg-os-pass').value = cfg.opensubtitles?.password || '';
+    document.getElementById('cfg-movies').value  = cfg.movies_folder || '';
+  } catch(e) {}
+  document.getElementById('settings-overlay').classList.add('open');
+}
+function closeSettings() { document.getElementById('settings-overlay').classList.remove('open'); }
+
+async function saveSettings() {
+  const body = {
+    utorrent: {
+      url:      document.getElementById('cfg-ut-url').value.trim(),
+      username: document.getElementById('cfg-ut-user').value.trim(),
+      password: document.getElementById('cfg-ut-pass').value,
+    },
+    opensubtitles: {
+      api_key:  document.getElementById('cfg-os-key').value.trim(),
+      username: document.getElementById('cfg-os-user').value.trim(),
+      password: document.getElementById('cfg-os-pass').value,
+    },
+    movies_folder: document.getElementById('cfg-movies').value.trim(),
+  };
+  try {
+    await api('POST', '/api/config', body);
+    toast('Settings saved ✓', 'ok');
+    closeSettings();
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'err');
+  }
+}
+
+async function osLogin() {
+  try {
+    await saveSettings();
+    await api('POST', '/api/opensubtitles/login');
+    toast('OpenSubtitles login successful ✓', 'ok');
+  } catch(e) {
+    toast('Login failed: ' + e.message, 'err');
+  }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+loadDownloads();
+dlTimer = setInterval(loadDownloads, 15000);
+</script>
+</body>
+</html>
