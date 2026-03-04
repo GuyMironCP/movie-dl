@@ -228,6 +228,7 @@
       🎬 My Movies
       <span class="count" id="my-movies-count">…</span>
       <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadMyMovies()">🔄</button>
+      <button class="btn btn-ghost btn-sm" id="refresh-ratings-btn" onclick="refreshRatings(this)">⭐ Refresh Ratings</button>
     </div>
     <input type="text" id="movies-filter" placeholder="Filter movies…"
            oninput="filterMovies(this.value)"
@@ -514,10 +515,10 @@ function buildRatingBadges(r) {
     const cls = pct >= 70 ? 'rt-fresh' : pct >= 40 ? 'rt-mixed' : 'rt-rotten';
     html += `<span class="rt-badge ${cls}">🍅 ${r.tomatometer}</span>`;
   }
-  if (r.popcornmeter) {
-    const pct = parseInt(r.popcornmeter);
-    const cls = pct >= 70 ? 'rt-fresh' : pct >= 40 ? 'rt-mixed' : 'rt-rotten';
-    html += `<span class="rt-badge ${cls}">🍿 ${r.popcornmeter}</span>`;
+  if (r.imdb) {
+    const score = parseFloat(r.imdb);
+    const cls = score >= 7 ? 'rt-fresh' : score >= 5 ? 'rt-mixed' : 'rt-rotten';
+    html += `<span class="rt-badge ${cls}">⭐ ${r.imdb.replace('/10','')}</span>`;
   }
   return html || '';
 }
@@ -529,6 +530,25 @@ function updateRatingBadge(name, r) {
       if (el) el.innerHTML = buildRatingBadges(r);
       break;
     }
+  }
+}
+
+async function refreshRatings(btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>';
+  try {
+    await api('POST', '/api/refresh-ratings');
+    // Clear client-side cache so cards reload after server finishes
+    Object.keys(movieRatings).forEach(k => delete movieRatings[k]);
+    // Wait a moment then reload
+    await new Promise(r => setTimeout(r, 4000));
+    await loadMyMovies();
+    toast('Ratings refreshed ✓', 'ok');
+  } catch(e) {
+    toast('Refresh failed: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '⭐ Refresh Ratings';
   }
 }
 

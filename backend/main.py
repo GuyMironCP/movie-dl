@@ -33,6 +33,11 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
 
 
+@app.on_event("startup")
+async def on_startup():
+    asyncio.create_task(_bg_prefetch_ratings())
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -225,7 +230,7 @@ async def list_torrents():
             continue
         hash_, status, name, size, progress = t[0], t[1], t[2], t[3], t[4]
         h = hash_.upper()
-        done = bool(status & 32)
+        done = (progress >= 1000)   # 1000 = 100% in uTorrent's tenths-of-percent format
 
         p = pending.get(h, {})
         # Trigger auto-copy+subtitle once when download completes
@@ -573,74 +578,65 @@ async def movie_rating(title: str):
     if key in cache:
         return cache[key]
 
-    result: dict = {"tomatometer": None, "popcornmeter": None, "imdb": None}
+    result: dict = {"tomatometer": None, "imdb": None}
     cfg = load_config()
 
-    bh = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    # ── OMDB: Tomatometer (critics) + IMDB score ──────────────────────────
+    # ── OMDB: Tomatometer (🍅 critics) + IMDB rating (⭐ audience) ──────────
     omdb_key = cfg.get("omdb_api_key", "")
-    if omdb_key:
-        try:
-            params: dict = {"apikey": omdb_key, "t": clean, "type": "movie"}
-            if year:
-                params["y"] = year
-            async with httpx.AsyncClient(timeout=8) as c:
-                r = await c.get(OMDB_BASE, params=params)
-                data = r.json()
-                if data.get("Response") == "True":
-                    for rating in data.get("Ratings", []):
-                        src, val = rating.get("Source", ""), rating.get("Value", "")
-                        if src == "Rotten Tomatoes":
-                            result["tomatometer"] = val
-                        elif src == "Internet Movie Database":
-                            result["imdb"] = val
-        except Exception:
-            pass
+    if not omdb_key:
+        cache[key] = result
+        _save_ratings_cache(cache)
+        return result
 
-    # ── RT: Tomatometer (meterScore) + Popcornmeter (audience page scrape) ──
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=bh) as c:
-            # Step 1: search — gives us meterScore and movie slug
-            r = await c.get(RT_SEARCH, params={"q": clean, "limit": 5})
-            movie_slug = None
-            if r.status_code == 200:
-                for m in r.json().get("movies", []):
-                    m_name = m.get("name", "").lower()
-                    if clean.lower() in m_name or m_name in clean.lower():
-                        if not result["tomatometer"]:
-                            meter = m.get("meterScore")
-                            if meter is not None:
-                                result["tomatometer"] = f"{meter}%"
-                        # audienceScore is rarely in search results, but try
-                        audience = m.get("audienceScore")
-                        if audience is not None:
-                            result["popcornmeter"] = f"{audience}%"
-                        movie_slug = m.get("url", "")
-                        break
-
-            # Step 2: fetch movie detail page to get audience score
-            if movie_slug and not result["popcornmeter"]:
-                pr = await c.get(f"https://www.rottentomatoes.com{movie_slug}")
-                if pr.status_code == 200:
-                    for pat in [
-                        r'"audienceScore"\s*:\s*\{\s*"score"\s*:\s*"?(\d+)"?',
-                        r'"popcornScore"\s*:\s*"?(\d+)"?',
-                        r'audienceScore[^0-9]{1,20}(\d{1,3})',
-                    ]:
-                        am = re.search(pat, pr.text)
-                        if am:
-                            result["popcornmeter"] = f"{am.group(1)}%"
-                            break
+        params: dict = {"apikey": omdb_key, "t": clean, "type": "movie"}
+        if year:
+            params["y"] = year
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(OMDB_BASE, params=params)
+            data = r.json()
+            if data.get("Response") == "True":
+                for rating in data.get("Ratings", []):
+                    src, val = rating.get("Source", ""), rating.get("Value", "")
+                    if src == "Rotten Tomatoes":
+                        result["tomatometer"] = val
+                    elif src == "Internet Movie Database":
+                        result["imdb"] = val
     except Exception:
         pass
 
     cache[key] = result
     _save_ratings_cache(cache)
     return result
+
+
+async def _bg_prefetch_ratings():
+    """On startup: fetch and cache ratings for all movies not yet in the cache."""
+    await asyncio.sleep(3)  # let server fully start
+    cfg = load_config()
+    if not cfg.get("omdb_api_key"):
+        return
+    root = Path(cfg.get("movies_folder", ""))
+    if not root.exists():
+        return
+    cache = _load_ratings_cache()
+    for p in sorted(root.iterdir(), key=lambda x: x.name.lower()):
+        if not p.is_dir():
+            continue
+        key = clean_title(p.name).lower()
+        if key not in cache:
+            try:
+                await movie_rating(title=p.name)
+                await asyncio.sleep(0.4)  # stay under OMDB rate limit
+            except Exception:
+                pass
+
+
+@app.post("/api/refresh-ratings")
+async def refresh_ratings():
+    """Manually trigger a background re-fetch of all movie ratings."""
+    asyncio.create_task(_bg_prefetch_ratings())
+    return {"ok": True}
 
 
 # ── Movies folders ────────────────────────────────────────────────────────────
