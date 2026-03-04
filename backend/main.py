@@ -12,16 +12,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-ROOT         = Path(__file__).parent.parent
-FRONTEND     = ROOT / "frontend"
-CONFIG_PATH  = ROOT / "config.json"
-PENDING_PATH = ROOT / "pending.json"
+ROOT                = Path(__file__).parent.parent
+FRONTEND            = ROOT / "frontend"
+CONFIG_PATH         = ROOT / "config.json"
+PENDING_PATH        = ROOT / "pending.json"
+RATINGS_CACHE_PATH  = ROOT / "ratings_cache.json"
+
+OMDB_BASE = "https://www.omdbapi.com"
+RT_SEARCH = "https://www.rottentomatoes.com/api/private/v2.0/movies"
 
 DEFAULT_CONFIG = {
     "utorrent":      {"url": "http://127.0.0.1:8080", "username": "admin", "password": ""},
     "opensubtitles": {"api_key": "", "username": "", "password": ""},
     "movies_folder": "",
     "auto_copy":     True,
+    "omdb_api_key":  "",
 }
 
 app = FastAPI()
@@ -538,6 +543,88 @@ async def download_subtitle(body: dict):
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+
+# ── Ratings ───────────────────────────────────────────────────────────────────
+
+def _load_ratings_cache() -> dict:
+    if RATINGS_CACHE_PATH.exists():
+        try:
+            return json.loads(RATINGS_CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def _save_ratings_cache(cache: dict):
+    RATINGS_CACHE_PATH.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def _extract_year(name: str) -> str:
+    m = re.search(r'\b(19\d{2}|20\d{2})\b', name)
+    return m.group(1) if m else ""
+
+@app.get("/api/movie-rating")
+async def movie_rating(title: str):
+    """Fetch Tomatometer (🍅) + Popcornmeter (🍿) for a movie title/folder name."""
+    clean = clean_title(title)
+    year  = _extract_year(title)
+    key   = clean.lower()
+
+    cache = _load_ratings_cache()
+    if key in cache:
+        return cache[key]
+
+    result: dict = {"tomatometer": None, "popcornmeter": None, "imdb": None}
+    cfg = load_config()
+
+    # ── OMDB: Tomatometer (critics) + IMDB score ──────────────────────────
+    omdb_key = cfg.get("omdb_api_key", "")
+    if omdb_key:
+        try:
+            params: dict = {"apikey": omdb_key, "t": clean, "type": "movie"}
+            if year:
+                params["y"] = year
+            async with httpx.AsyncClient(timeout=8) as c:
+                r = await c.get(OMDB_BASE, params=params)
+                data = r.json()
+                if data.get("Response") == "True":
+                    for rating in data.get("Ratings", []):
+                        src = rating.get("Source", "")
+                        val = rating.get("Value", "")
+                        if src == "Rotten Tomatoes":
+                            result["tomatometer"] = val
+                        elif src == "Internet Movie Database":
+                            result["imdb"] = val
+        except Exception:
+            pass
+
+    # ── RT unofficial API: Popcornmeter (audience score) ──────────────────
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as c:
+            r = await c.get(RT_SEARCH, params={"q": clean, "limit": 5}, headers=headers)
+            if r.status_code == 200:
+                movies = r.json().get("movies", [])
+                for m in movies:
+                    m_name = m.get("name", "").lower()
+                    if clean.lower() in m_name or m_name in clean.lower():
+                        score = m.get("audienceScore")
+                        if score is not None:
+                            result["popcornmeter"] = f"{score}%"
+                        # Use RT tomatometer too if OMDB didn't provide it
+                        if not result["tomatometer"]:
+                            ts = m.get("meterScore")
+                            if ts is not None:
+                                result["tomatometer"] = f"{ts}%"
+                        break
+    except Exception:
+        pass
+
+    cache[key] = result
+    _save_ratings_cache(cache)
+    return result
 
 
 # ── Movies folders ────────────────────────────────────────────────────────────

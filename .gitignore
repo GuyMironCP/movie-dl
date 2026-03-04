@@ -4,3 +4,4 @@ __pycache__/
 venv/
 pending.json
 config.json
+ratings_cache.json

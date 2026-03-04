@@ -111,6 +111,11 @@
     .sub-badge-ok  { background: rgba(22,163,74,0.2);  color: #86efac; border: 1px solid rgba(22,163,74,0.3);  border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; font-weight: 700; }
     .sub-badge-miss{ background: rgba(234,179,8,0.15); color: #fde047; border: 1px solid rgba(234,179,8,0.3);  border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; font-weight: 700; }
     .movie-card-action { font-size: 0.75rem; color: #818cf8; margin-top: 2px; }
+    .movie-ratings { display: flex; gap: 4px; flex-wrap: wrap; min-height: 18px; }
+    .rt-badge { border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; font-weight: 700; display: inline-block; border: 1px solid; }
+    .rt-fresh  { background: rgba(22,163,74,0.2);  color: #86efac; border-color: rgba(22,163,74,0.3); }
+    .rt-mixed  { background: rgba(202,138,4,0.2);  color: #fde047; border-color: rgba(202,138,4,0.3); }
+    .rt-rotten { background: rgba(220,38,38,0.2);  color: #fca5a5; border-color: rgba(220,38,38,0.3); }
 
     /* ── FOLDER LIST ── */
     .folder-list {
@@ -296,6 +301,16 @@
     <div class="field"><label>Password</label><input type="password" id="cfg-os-pass"/></div>
     <button class="btn btn-ghost btn-sm" onclick="osLogin()">Test / Login to OpenSubtitles</button>
 
+    <div class="section-sep">Ratings</div>
+    <div class="field">
+      <label>OMDB API Key (for 🍅 Tomatometer)</label>
+      <input type="text" id="cfg-omdb" placeholder="e.g. 1a2b3c4d"/>
+      <div class="field-note">
+        Free key at <a href="https://www.omdbapi.com/apikey.aspx" target="_blank">omdbapi.com/apikey.aspx</a>
+        (1,000 lookups/day). Without it only 🍿 Popcornmeter will show.
+      </div>
+    </div>
+
     <div class="section-sep">Folders</div>
     <div class="field">
       <label>Movies Storage Folder</label>
@@ -318,6 +333,7 @@
 let selectedTorrent = null;
 let dlTimer = null;
 let moviesFolders = [];   // cached folder list
+const movieRatings = {}; // keyed by folder name → {tomatometer, popcornmeter, imdb}
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function toast(msg, type = '') {
@@ -484,8 +500,51 @@ async function loadMyMovies() {
     allMovies = folders;
     count.textContent = folders.length;
     renderMovies(folders);
+    loadAllRatings(folders);
   } catch (e) {
     body.innerHTML = `<div class="empty">⚠️ ${escHtml(e.message)}</div>`;
+  }
+}
+
+function buildRatingBadges(r) {
+  if (!r) return '<span style="color:var(--muted);font-size:0.65rem">···</span>';
+  let html = '';
+  if (r.tomatometer) {
+    const pct = parseInt(r.tomatometer);
+    const cls = pct >= 70 ? 'rt-fresh' : pct >= 40 ? 'rt-mixed' : 'rt-rotten';
+    html += `<span class="rt-badge ${cls}">🍅 ${r.tomatometer}</span>`;
+  }
+  if (r.popcornmeter) {
+    const pct = parseInt(r.popcornmeter);
+    const cls = pct >= 70 ? 'rt-fresh' : pct >= 40 ? 'rt-mixed' : 'rt-rotten';
+    html += `<span class="rt-badge ${cls}">🍿 ${r.popcornmeter}</span>`;
+  }
+  return html || '';
+}
+
+function updateRatingBadge(name, r) {
+  for (const card of document.querySelectorAll('.movie-card')) {
+    if (card.dataset.movie === name) {
+      const el = card.querySelector('.movie-ratings');
+      if (el) el.innerHTML = buildRatingBadges(r);
+      break;
+    }
+  }
+}
+
+async function loadAllRatings(movies) {
+  const BATCH = 5;
+  const toFetch = movies.filter(m => movieRatings[m.name] === undefined);
+  for (let i = 0; i < toFetch.length; i += BATCH) {
+    await Promise.allSettled(toFetch.slice(i, i + BATCH).map(async m => {
+      try {
+        const r = await api('GET', `/api/movie-rating?title=${encodeURIComponent(m.name)}`);
+        movieRatings[m.name] = r;
+        updateRatingBadge(m.name, r);
+      } catch (e) {
+        movieRatings[m.name] = {};
+      }
+    }));
   }
 }
 
@@ -497,8 +556,9 @@ function renderMovies(movies) {
   }
   body.innerHTML = '<div class="movies-grid">' +
     movies.map(m => `
-      <div class="movie-card" onclick="findSubsForMovie('${escHtml(m.name)}', '${escHtml(m.path)}')">
+      <div class="movie-card" data-movie="${escHtml(m.name)}" onclick="findSubsForMovie('${escHtml(m.name)}', '${escHtml(m.path)}')">
         <div class="movie-card-name">${escHtml(m.name)}</div>
+        <div class="movie-ratings">${buildRatingBadges(movieRatings[m.name])}</div>
         <div class="movie-card-badges">
           ${m.has_subtitle
             ? '<span class="sub-badge-ok">✓ Subtitles</span>'
@@ -515,6 +575,7 @@ function filterMovies(q) {
     : allMovies;
   document.getElementById('my-movies-count').textContent = filtered.length;
   renderMovies(filtered);
+  loadAllRatings(filtered);
 }
 
 function findSubsForMovie(name, folderPath) {
@@ -714,10 +775,12 @@ function renderDownloads(torrents, error) {
       statusEl = `<span style="color:#4ade80;font-size:0.78rem">${escHtml(t.auto_note || '✓ Done')}</span>`;
     } else if (t.auto_status === 'error') {
       statusEl = `<span style="color:#f87171;font-size:0.78rem">⚠ ${escHtml(t.auto_note)}</span>`;
-    } else if (done && t.is_tracked && !t.copied) {
-      // auto_copy off or not yet triggered — show manual button
-      statusEl = `<button class="btn btn-green btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy to Movies</button>`;
     }
+
+    // Manual copy button always visible for completed tracked torrents (except while auto-copying)
+    const copyBtn = (done && t.is_tracked && t.auto_status !== 'copying')
+      ? `<button class="btn btn-ghost btn-sm" onclick="copyTorrent('${t.hash}', this)">📁 Copy</button>`
+      : '';
 
     return `<div class="dl-row">
       <div>
@@ -725,7 +788,7 @@ function renderDownloads(torrents, error) {
         <div class="progress-bar"><div class="progress-fill ${done ? 'done' : ''}" style="${fill}"></div></div>
         <div class="dl-meta">${pct}% · ${t.size}${done ? ' · ✓ Complete' : ''}</div>
       </div>
-      <div class="dl-actions">${statusEl}</div>
+      <div class="dl-actions">${statusEl}${copyBtn}</div>
     </div>`;
   }).join('');
 }
@@ -754,6 +817,7 @@ async function openSettings() {
     document.getElementById('cfg-os-key').value  = cfg.opensubtitles?.api_key  || '';
     document.getElementById('cfg-os-user').value = cfg.opensubtitles?.username || '';
     document.getElementById('cfg-os-pass').value = cfg.opensubtitles?.password || '';
+    document.getElementById('cfg-omdb').value    = cfg.omdb_api_key || '';
     document.getElementById('cfg-movies').value  = cfg.movies_folder || '';
   } catch(e) {}
   document.getElementById('settings-overlay').classList.add('open');
@@ -772,7 +836,8 @@ async function saveSettings() {
       username: document.getElementById('cfg-os-user').value.trim(),
       password: document.getElementById('cfg-os-pass').value,
     },
-    movies_folder: document.getElementById('cfg-movies').value.trim(),
+    movies_folder:  document.getElementById('cfg-movies').value.trim(),
+    omdb_api_key:   document.getElementById('cfg-omdb').value.trim(),
   };
   try {
     await api('POST', '/api/config', body);
